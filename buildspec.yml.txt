@@ -1,0 +1,63 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      java: corretto11
+      docker: 19
+      git: 2.x
+    commands:
+      - echo "Setting up global git credentials storage..."
+      - git config --global credential.helper store
+      - echo "Installing Maven and Docker..."
+      - mvn --version
+      - docker --version
+  
+  pre_build:
+    commands:
+      - echo "Navigating to the admin-portal-app directory..."
+      - cd admin-portal-app
+      - echo "Pulling latest changes from Git repository..."
+      - git pull
+      - echo "Navigating to Server directory..."
+      - cd Server
+      - echo "Running Maven clean and install without tests..."
+      - mvn clean
+      - mvn clean install -DskipTests=true &
+      - pid=$!
+      - wait $pid
+      - echo "Navigating to API directory..."
+      - cd api
+      - echo "Fetching current date..."
+      - current_date=$(date +'%Y%m%d%H%M%S')
+      - echo "Current date is $current_date"
+  
+  build:
+    commands:
+      - echo "Checking for previous Docker containers..."
+      - |
+        if [ "$(docker ps -aq -f name=admin-portal-)" ]; then
+          echo "Removing previous container..."
+          docker rm -f $(docker ps -aq -f name=admin-portal-)
+        fi
+      - docker_tag="admin-portal:${current_date}"
+      - echo "Building Docker image with tag $docker_tag..."
+      - docker build -t "$docker_tag" .
+
+  post_build:
+    commands:
+      - echo "Running Docker container..."
+      - |
+        docker run -d -p 9090:9090 --name admin-portal-${current_date} \
+        -e SPRING_DATASOURCE_URL=jdbc:mysql://pl-uat-mysql-rds.c7t2ppuyc7hn.ap-south-1.rds.amazonaws.com:3306/admin_portal?serverTimezone=Asia/Kolkata \
+        -e SPRING_DATASOURCE_USERNAME=admin \
+        -e SPRING_DATASOURCE_PASSWORD=9YANCkOzd2mHLvncyw4U8BdGbNTxVDJMFRs= \
+        -e SPRING_DATASOURCE_DRIVER_CLASS_NAME=com.mysql.cj.jdbc.Driver \
+        -e SPRING_JPA_PROPERTIES_HIBERNATE_DIALECT=org.hibernate.dialect.MySQL8Dialect \
+        -e SPRING_JPA_HIBERNATE_DDL-AUTO=update \
+        -e TZ=Asia/Kolkata \
+        -e ENABLE_CRON=true \
+        -v /tmp:/tmp \
+        --restart=unless-stopped admin-portal:${current_date}
+      - echo "Fetching logs from the running container..."
+      - docker logs admin-portal-${current_date} -f
